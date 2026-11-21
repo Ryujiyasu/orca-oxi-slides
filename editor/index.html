@@ -19,8 +19,6 @@
 <meta name="twitter:description" content="View and edit .docx / .xlsx / .pptx files natively in the browser. Built with Rust + WebAssembly.">
 <meta name="twitter:image" content="https://oxi-dd65f4.gitlab.io/oxi-logo.png">
 <link rel="canonical" href="https://oxi-dd65f4.gitlab.io/">
-<link rel="icon" type="image/x-icon" href="./favicon.ico">
-<link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
 <link rel="apple-touch-icon" href="./apple-touch-icon.png">
 <style>
 :root {
@@ -1011,7 +1009,8 @@ input[type="file"] { display: none; }
     width: 120px;
     zoom: var(--thumb-zoom, 1);
 }
-.slide-main .slide-wrapper { zoom: var(--slide-zoom, 1); }
+/* --slide-zoom is the fit to the main area times the status bar's zoom. */
+.slide-main .slide-wrapper { zoom: var(--slide-zoom, 1); flex-shrink: 0; }
 .slide-thumb.active .slide-thumb-preview {
     border-color: var(--oxi-slides);
     border-width: 2px;
@@ -1021,7 +1020,10 @@ input[type="file"] { display: none; }
     min-width: 0;
     display: flex;
     flex-direction: column;
-    align-items: center;
+    /* `safe`: a slide zoomed wider than the area starts at its left edge
+       and scrolls, instead of overhanging both sides out of reach. */
+    align-items: safe center;
+    overflow-x: auto;
     gap: 8px;
 }
 .slide-wrapper {
@@ -2350,10 +2352,20 @@ const zoomOut = document.getElementById('zoomOut');
 const zoomIn = document.getElementById('zoomIn');
 let currentZoom = 100;
 
+/** Set by the deck view: re-applies the fit and the zoom to the slide. */
+let applySlideZoom = null;
+
 function applyZoom() {
     const container = document.getElementById('pages-container');
-    container.style.transform = `scale(${currentZoom / 100})`;
-    container.style.transformOrigin = 'top center';
+    if (container.querySelector('.pptx-layout') && applySlideZoom) {
+        // A deck zooms its slide only. Scaling the whole view also scaled
+        // the slide list and swung it off the left edge, out of reach.
+        container.style.transform = '';
+        applySlideZoom();
+    } else {
+        container.style.transform = `scale(${currentZoom / 100})`;
+        container.style.transformOrigin = 'top center';
+    }
     zoomLabel.textContent = currentZoom + '%';
     zoomSlider.value = currentZoom;
 }
@@ -4846,11 +4858,16 @@ function renderEditablePptx(presentation) {
     // (which narrows with the window), the slide to the main area's.
     pptxResize?.disconnect();
     const slideWidth = presentation.slide_width * scale;
+    applySlideZoom = () => {
+        const fit = Math.min(1, mainArea.clientWidth / slideWidth);
+        mainArea.style.setProperty('--slide-zoom', String(fit * currentZoom / 100));
+    };
     pptxResize = new ResizeObserver(() => {
         const room = thumbPanel.clientWidth - 18 - 8 - 8; // number, gap, padding
         thumbPanel.style.setProperty('--thumb-zoom', String(Math.max(0.25, Math.min(1, room / 120))));
-        mainArea.style.setProperty('--slide-zoom', String(Math.min(1, mainArea.clientWidth / slideWidth)));
+        applySlideZoom();
     });
+    applyZoom();
     pptxResize.observe(thumbPanel);
     pptxResize.observe(mainArea);
 }
@@ -5514,13 +5531,12 @@ window.downloadDocument = downloadEdited;
 
 // === Oxi engine loader (inserted by integrations/orca/build.mjs) ===
 async function __oxiEngineBytes() {
-    const parts = await Promise.all(["oxidocs_engine.gz.0.wasm","oxidocs_engine.gz.1.wasm"].map(async (name) => {
+    const parts = await Promise.all(["oxidocs_engine.0.wasm","oxidocs_engine.1.wasm","oxidocs_engine.2.wasm"].map(async (name) => {
         const r = await fetch('./' + name);
         if (!r.ok) throw new Error(name + ': HTTP ' + r.status);
         return new Uint8Array(await r.arrayBuffer());
     }));
-    const gz = new Blob(parts);
-    return await new Response(gz.stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+    return await new Blob(parts).arrayBuffer();
 }
 
 // === Orca bridge (inserted by integrations/orca/build.mjs) ===
