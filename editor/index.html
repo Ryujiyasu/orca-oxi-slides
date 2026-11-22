@@ -5530,11 +5530,29 @@ window.loadSample = loadSample;
 window.downloadDocument = downloadEdited;
 
 // === Oxi engine loader (inserted by integrations/orca/build.mjs) ===
+// Each part is a WebAssembly module whose one custom section,
+// "oxi-engine-part", holds a slice of the engine; the slices are joined.
 async function __oxiEngineBytes() {
+    const slice = (name, b) => {
+        let at = 8;
+        const leb = () => {
+            let v = 0, shift = 0, x;
+            do { x = b[at++]; v += (x & 0x7f) * 2 ** shift; shift += 7; } while (x & 0x80);
+            return v;
+        };
+        if (b[0] !== 0 || b[1] !== 0x61 || b[2] !== 0x73 || b[3] !== 0x6d || b[at++] !== 0) {
+            throw new Error(name + ': not an engine part');
+        }
+        const end = leb() + at;
+        const nameLen = leb();
+        const label = new TextDecoder().decode(b.subarray(at, at + nameLen));
+        if (label !== 'oxi-engine-part' || end !== b.length) throw new Error(name + ': not an engine part');
+        return b.subarray(at + nameLen, end);
+    };
     const parts = await Promise.all(["oxidocs_engine.0.wasm","oxidocs_engine.1.wasm","oxidocs_engine.2.wasm"].map(async (name) => {
         const r = await fetch('./' + name);
         if (!r.ok) throw new Error(name + ': HTTP ' + r.status);
-        return new Uint8Array(await r.arrayBuffer());
+        return slice(name, new Uint8Array(await r.arrayBuffer()));
     }));
     return await new Blob(parts).arrayBuffer();
 }
